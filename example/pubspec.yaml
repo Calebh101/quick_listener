@@ -1,0 +1,15 @@
+name: example
+description: A sample command-line application for quick_listener.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  quick_listener:
+    path: ..
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.24.0
