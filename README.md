@@ -6,7 +6,7 @@ This is similar to the `Broadcast Message` action in [Scratch](https://scratch.m
 
 This is useful for times when you have a state change in one section of your code and you want to trigger an update in another, or when you just want to notify your Flutter widgets of new data.
 
-**Note**: This package is still in beta and is currently being tested.
+**Note**: This package is still in beta and is currently being tested. Don't expect this to work properly until it exits beta.
 
 # Usage
 

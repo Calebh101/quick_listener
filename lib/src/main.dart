@@ -1,7 +1,7 @@
 import 'dart:async';
 
 List<String> _keys = [];
-StreamController _controller = StreamController.broadcast();
+StreamController<QuickListenerEvent> _controller = StreamController.broadcast();
 
 /// Get all keys with a current state.
 ///
@@ -107,8 +107,7 @@ class QuickListener<T> {
   }) {
     _subscriptions.add(
       _controller.stream.listen(
-        (dynamic raw) {
-          QuickListenerEvent input = raw;
+        (QuickListenerEvent input) {
           QuickListenerEventType event = input.event!;
 
           if (input.keys != null &&
@@ -144,7 +143,7 @@ class QuickListener<T> {
   ///
   /// [input] is sent as an error (thus triggering a listener's [onError]) when [input] can be classified as an [Error] or [Exception]. To manually override this, you can input a [QuickListenerData] object instead.
   QuickListener broadcast(dynamic input) {
-    if (input! is QuickListenerData) {
+    if (input is! QuickListenerData) {
       if (_isError(input)) {
         input = QuickListenerData.error(input);
       } else {
@@ -189,11 +188,12 @@ class QuickListener<T> {
     for (StreamSubscription subscription in _subscriptions) {
       subscription.cancel();
     }
+    _subscriptions.clear();
   }
 
   // Make sure each key's state exists in [_keys].
   void _initialize() {
-    for (String key in keys!) {
+    for (String key in (keys ?? [])) {
       if (!_keys.contains(key)) {
         _keys.add(key);
       }
