@@ -23,17 +23,17 @@ You can either set the object as a variable and use it later/several times, or c
 ```dart
 // Set it as a variable
 QuickListener listener = QuickListener("MyKey");
-listener.listen((data) => print("$data"));
+listener.listen<String>((String? data) => print("$data"));
 listener.broadcast("Hello, world!");
 
 // Use it inline
-QuickListener("MyKey").listen((data) => print("$data"));
+QuickListener("MyKey").listen<String>((String? data) => print("$data"));
 ```
 
 Because `listen()` and `broadcast()` return the object itself, you can chain commands easily:
 
 ```dart
-QuickListener("MyKey").listen((data) => print("$data")).broadcast("Hello, world!");
+QuickListener("MyKey").listen<String>((String? data) => print("$data")).broadcast("Hello, world!");
 ```
 
 To define a key or multiple keys in an object, you have several options.
@@ -49,6 +49,19 @@ QuickListener listener = QuickListener(null); // Same as not including a key at 
 ```
 
 You can only include a `String`, `List<String>`, or `null` value in the initializer; otherwise a QuickListenerTypeError will be thrown.
+
+If you prefer stricter typing than this, there are 3 extra factory constructors:
+
+```dart
+// Same as QuickListener(null); however, no arguments are accepted.
+QuickListener.all();
+
+// Same as QuickListener("MyKey"); however, QuickListener.single *requires* a String.
+QuickListener.single("MyKey");
+
+// Same as QuickListener(["MyKey", "MyOtherKey"]); however, QuickListener.all *requires* a List<String>.
+QuickListener.multiple(["MyKey", "MyOtherKey"]);
+```
 
 ## Broadcasting
 
@@ -74,7 +87,7 @@ You can manually override the input data by passing in a `QuickListenerData` obj
 Syntax:
 
 ```dart
-QuickListener().listen(onData, onError: onError, onDone: onDone);
+QuickListener().listen<T>(onData, onError: onError, onDone: onDone);
 ```
 
 `onData` is a required callback of `void Function(dynamic data)?`. `data` is whatever is passed into the `broadcast`.
@@ -82,6 +95,8 @@ QuickListener().listen(onData, onError: onError, onDone: onDone);
 `onError` is an optional named callback of `void Function(Object error)?`. `error` is the passed error or exception, but it can be any `Object?` if the override method is used in the `broadcast`.
 
 `onDone` is an optional named callback of `void Function()?`. It is called when the `done` event is passed and the key/keys is disposed of.
+
+The `T` is only used as a runtime check. If the received data is not of type `T`, `onData` is still called, but its data will be null.
 
 ## Finishing
 
@@ -95,8 +110,10 @@ This broadcasts the `done` event, which removes the key(s) and disposes of the l
 
 All listeners with *any* of the keys sent with the `done` event gets closed.
 
+It does take some time to close all listeners, due to the nature of broadcasting.
+
 **Warning**: Using these on a null key cancels all active keys.
 
 # Errors and Exceptions
 
-`QuickListenerTypeError` is called when the wrong type is inputted as a key in `QuickListener`. `QuickListener` keys only accept a `String`, `List<String>`, or `null` input.
+- `QuickListenerTypeError` is called when the wrong type is inputted as a key in `QuickListener`. `QuickListener` keys only accept a `String`, `List<String>`, or `null` input.
