@@ -75,6 +75,8 @@ void main(List<String> arguments) async {
   await countdown(2);
   print("All keys: ${getAllQuickListenerKeys()}");
   print("Disposing key2");
+  await QuickListener("key2").done();
+  print("All keys: ${getAllQuickListenerKeys()}");
 
   (() async {
     print("Broadcasting on key5 in 3 seconds...");
@@ -95,7 +97,8 @@ void main(List<String> arguments) async {
 
   print("All keys: ${getAllQuickListenerKeys()}");
   print("Disposing all keys...");
-  QuickListener().done();
+  await QuickListener().done();
+  print("All keys: ${getAllQuickListenerKeys()}");
 }
 
 Future<void> countdown([int seconds = 1]) async {

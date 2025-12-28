@@ -6,8 +6,30 @@ import 'dart:async';
 List<String> _keys = [];
 bool _debugMode = false;
 
+int _nodeIdCounter = 0;
+int _nextNodeId() => ++_nodeIdCounter;
+
+int _broadcastIdCounter = 0;
+int _nextBroadcastId() => ++_broadcastIdCounter;
+
+final Map<int, BroadcastBarrier> _broadcastBarriers = {};
+final Map<int, int> _listenerCounts = {};
+
 StreamController<QuickListenerEvent> _controller = StreamController.broadcast();
-StreamController<QuickListenerResponse> _responseController = StreamController.broadcast();
+StreamController<QuickListenerResponse> _responseController =
+    StreamController.broadcast();
+
+class BroadcastBarrier {
+  int remaining;
+  final Completer<void> completer = Completer<void>();
+
+  BroadcastBarrier(this.remaining);
+
+  void signal() {
+    remaining--;
+    if (remaining <= 0 && !completer.isCompleted) completer.complete();
+  }
+}
 
 /// Get all keys currently active.
 ///
@@ -78,6 +100,8 @@ class QuickListener {
   /// If the input is just one string, then this is set to an array with only that one string.
   List<String>? keys;
 
+  final int id;
+
   // This is added to for each [listen] that's called.
   final List<StreamSubscription> _subscriptions = [];
 
@@ -86,7 +110,7 @@ class QuickListener {
   /// [QuickListener]'s don't contain stream controllers. If you call [QuickListener.done], it'll close all listeners of that key, no matter what object it's using.
   ///
   /// The only held state is the stream subscription created when [listen] is called, but this is disposed of cleanly when [done] is called on the key.
-  QuickListener([Object? key]) {
+  QuickListener([Object? key]) : id = _nextNodeId() {
     if (key == null) {
       keys = null;
     } else if (key is List) {
@@ -137,20 +161,35 @@ class QuickListener {
     };
   }
 
+  void _addListener([bool remove = false]) {
+    _listenerCounts.update(
+      id,
+      (value) => value <= 0 && remove ? 0 : (value + (remove ? -1 : 1)),
+      ifAbsent: () => remove ? 0 : 1,
+    );
+  }
+
   /// Start listening to the keys specified.
   ///
   /// If you specified one key, it'll listen to that one key. If you specified multiple keys, it'll listen to all of your specified keys. If you didn't specify any keys, it'll listen for anything.
   ///
   /// When data is received, it is only passed into [onData] if it is an instance of [T].
   QuickListener listen<T>(
-    void Function(T? data, void Function([dynamic input]) respond)? onData, {
-    void Function(Object error, void Function([dynamic input]) respond)? onError,
-    void Function(Object error)? onStreamError,
-    void Function()? onDone,
+    FutureOr<void> Function(T? data, void Function([dynamic input]) respond)?
+    onData, {
+    FutureOr<void> Function(
+      Object error,
+      void Function([dynamic input]) respond,
+    )?
+    onError,
+    FutureOr<void> Function(Object error)? onStreamError,
   }) {
+    _addListener();
+    _debug("Found ${_listenerCounts[id]} listeners for ID $id");
+
     _subscriptions.add(
       _controller.stream.listen(
-        (QuickListenerEvent input) {
+        (QuickListenerEvent input) async {
           QuickListenerEventType event = input.type;
 
           if (input.keys != null &&
@@ -159,17 +198,33 @@ class QuickListener {
             return;
           }
 
-          if (event == QuickListenerEventType.error && input.error != null) {
-            if (onError != null) onError(input.error!, _respond(true));
-            return;
-          }
+          try {
+            if (event == QuickListenerEventType.error && input.error != null) {
+              await onError?.call(input.error!, _respond(true));
+              return;
+            }
 
-          if (event == QuickListenerEventType.done) {
-            done(true);
-            return;
-          }
+            if (event == QuickListenerEventType.done) {
+              if (input.keys != null) {
+                for (var x in input.keys!) {
+                  keys?.remove(x);
+                }
+              } else {
+                keys?.clear();
+              }
 
-          onData?.call(input.data is T ? input.data : null, _respond(false));
+              if (keys != null && keys!.isEmpty) {
+                await done();
+              }
+            }
+
+            await onData?.call(
+              input.data is T ? input.data : null,
+              _respond(false),
+            );
+          } finally {
+            _broadcastBarriers[input.id]?.signal();
+          }
         },
         cancelOnError: false,
         onError: onStreamError ?? (e) {},
@@ -182,7 +237,36 @@ class QuickListener {
   /// Broadcast any input to the specified key(s). If a specified key(s) is not provided, it'll broadcast to all keys.
   ///
   /// [input] is sent as an error (thus triggering a listener's [StreamSubscription.onError]) when [input] can be classified as an [Error] or [Exception]. To manually override this, you can input a [QuickListenerData] object instead.
+  Future<QuickListener> broadcastAndWait([dynamic input]) async {
+    final bid = _nextBroadcastId();
+    final count = _listenerCounts[bid] ?? 0;
+    final barrier = BroadcastBarrier(count);
+
+    _broadcastBarriers[bid] = barrier;
+    _broadcast(bid, input);
+    _debug("Broadcasting broadcast $bid from node $id");
+
+    await barrier.completer.future.whenComplete(() {
+      _broadcastBarriers.remove(bid);
+    });
+
+    return this;
+  }
+
+  /// Broadcast any input to the specified key(s). If a specified key(s) is not provided, it'll broadcast to all keys.
+  ///
+  /// [input] is sent as an error (thus triggering a listener's [StreamSubscription.onError]) when [input] can be classified as an [Error] or [Exception]. To manually override this, you can input a [QuickListenerData] object instead.
+  ///
+  /// This version simply calls [broadcastAndWait] and immediately returns.
   QuickListener broadcast([dynamic input]) {
+    broadcastAndWait(input);
+    return this;
+  }
+
+  /// Broadcast any input to the specified key(s). If a specified key(s) is not provided, it'll broadcast to all keys.
+  ///
+  /// [input] is sent as an error (thus triggering a listener's [StreamSubscription.onError]) when [input] can be classified as an [Error] or [Exception]. To manually override this, you can input a [QuickListenerData] object instead.
+  QuickListener _broadcast(int id, dynamic input) {
     if (input is! QuickListenerData) {
       if (_isError(input)) {
         input = QuickListenerData.error(input);
@@ -195,8 +279,13 @@ class QuickListener {
       if (input._error == true) throw Exception();
       _controller.sink.add(
         input._done == true
-            ? QuickListenerEvent.done(keys: keys)
-            : QuickListenerEvent(data: input.data, error: null, keys: keys),
+            ? QuickListenerEvent.done(keys: keys, id: id)
+            : QuickListenerEvent(
+                data: input.data,
+                error: null,
+                keys: keys,
+                id: id,
+              ),
       );
     } catch (e) {
       Object error = e;
@@ -209,6 +298,7 @@ class QuickListener {
             error: error,
             type: QuickListenerEventType.error,
             keys: keys,
+            id: id,
           ),
         );
       } catch (_) {
@@ -220,7 +310,9 @@ class QuickListener {
   }
 
   // Return a stream using `_controller` targeting the specified `QuickListenerEventType`.
-  Stream<QuickListenerEvent> _getStream([List<QuickListenerEventType>? targets]) {
+  Stream<QuickListenerEvent> _getStream([
+    List<QuickListenerEventType>? targets,
+  ]) {
     return _controller.stream.where((x) {
       if (targets == null) return true;
       return targets.contains(x.type);
@@ -234,7 +326,9 @@ class QuickListener {
   /// Timeouts are uncaught.
   Future<QuickListenerEvent> waitForNewData({Duration? timeout}) async {
     final stream = _getStream([QuickListenerEventType.data]);
-    final result = timeout == null ? await stream.first : await stream.first.timeout(timeout);
+    final result = timeout == null
+        ? await stream.first
+        : await stream.first.timeout(timeout);
     return result;
   }
 
@@ -243,9 +337,14 @@ class QuickListener {
   /// All signals will be returned here.
   ///
   /// Timeouts are uncaught.
-  Future<QuickListenerEvent> waitForNewEvent({Duration? timeout, List<QuickListenerEventType> events = QuickListenerEventType.values}) async {
+  Future<QuickListenerEvent> waitForNewEvent({
+    Duration? timeout,
+    List<QuickListenerEventType> events = QuickListenerEventType.values,
+  }) async {
     final stream = _getStream(events);
-    final result = timeout == null ? await stream.first : await stream.first.timeout(timeout);
+    final result = timeout == null
+        ? await stream.first
+        : await stream.first.timeout(timeout);
     return result;
   }
 
@@ -283,16 +382,19 @@ class QuickListener {
   /// Closes down the key by removing it and its state, and disposing of all the listeners. It can be re-added later.
   ///
   /// [referencedFromStream] is for internal use only.
-  void done([bool referencedFromStream = false]) async {
+  Future<void> done([bool referencedFromStream = false]) async {
     for (String key in keys ?? []) {
       _keys.remove(key);
     }
 
-    if (_subscriptions.isNotEmpty) await Future.wait(_subscriptions.map((x) => x.cancel()));
+    if (_subscriptions.isNotEmpty)
+      await Future.wait(_subscriptions.map((x) => x.cancel()));
     _subscriptions.clear();
+    _addListener(true);
+    _debug("Found ${_listenerCounts[id]} listeners for ID $id");
 
     if (!referencedFromStream) {
-      broadcast(QuickListenerData.done());
+      await broadcastAndWait(QuickListenerData.done());
     }
   }
 
@@ -314,10 +416,14 @@ class QuickListenerEvent {
   /// The data being sent along with the event.
   final dynamic data;
 
+  /// The optional error being sent along with the event.
   final Object? error;
 
   /// The key(s) affected. Null if all.
   final List? keys;
+
+  /// ID of the broadcasting node.
+  final int id;
 
   /// The event type being sent.
   ///
@@ -332,10 +438,14 @@ class QuickListenerEvent {
     required this.data,
     required this.error,
     required this.keys,
+    required this.id,
   });
 
   /// Simply sets [type] to [QuickListenerEventType.done].
-  QuickListenerEvent.done({required this.keys}) : type = QuickListenerEventType.done, data = null, error = null;
+  QuickListenerEvent.done({required this.keys, required this.id})
+    : type = QuickListenerEventType.done,
+      data = null,
+      error = null;
 
   @override
   String toString() {
@@ -363,17 +473,24 @@ class QuickListenerData {
   /// You can input this into [QuickListener.broadcast] to override the default method, which is using any [Error] or [Exception] as an error.
   ///
   /// This sends an error instead of a regular data event.
-  QuickListenerData.error(this.error) : data = null, _error = true, _done = false;
+  QuickListenerData.error(this.error)
+    : data = null,
+      _error = true,
+      _done = false;
 
   /// This is used for an easy way of transmitting data, errors, or "done" signals.
   /// You can input this into [QuickListener.broadcast] to override the default method, which is using any [Error] or [Exception] as an error.
   ///
   /// This sends a done signal instead of a regular data event.
-  QuickListenerData.done() : data = null, error = null, _error = false, _done = true;
+  QuickListenerData.done()
+    : data = null,
+      error = null,
+      _error = false,
+      _done = true;
 
   @override
   String toString() {
-    return "QuickListenerData(type: ${_done ? "Done" : (_error ? "Error": "Data")}, data: $data, error: $error)";
+    return "QuickListenerData(type: ${_done ? "Done" : (_error ? "Error" : "Data")}, data: $data, error: $error)";
   }
 }
 
