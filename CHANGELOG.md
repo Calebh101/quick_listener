@@ -12,3 +12,8 @@ I finally remembered this existed after some time. I've made a *lot* of changes 
 - `QuickListenerEvent.event` is deprecated. Use `QuickListenerEvent.type` instead.
 
 There are probably a lot more changes that I'm forgetting; it's probably worth reading over the readme. Reminder that this is still in beta.
+
+## 0.0.2 - 12/29/25
+
+- Added `QuickListener.dispose`.
+- Corrected some mistakes in the documentation.

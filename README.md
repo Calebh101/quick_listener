@@ -24,11 +24,11 @@ You can either set the object as a variable and use it later/several times, or c
 ```dart
 // Set it as a variable
 QuickListener listener = QuickListener("MyKey");
-listener.listen<String>((String? data) => print("$data"));
+listener.listen<String>((String? data, respond) => print("$data"));
 listener.broadcast("Hello, world!");
 
 // Use it inline
-QuickListener("MyKey").listen<String>((String? data) => print("$data")).broadcast("Hello, world!");
+QuickListener("MyKey").listen<String>((String? data, respond) => print("$data")).broadcast("Hello, world!");
 ```
 
 Because `listen()` and `broadcast()` return the object itself, you can chain commands easily, as seen above.
@@ -73,13 +73,13 @@ Syntax:
 QuickListener().listen<T>(onData, onError: onError, onDone: onDone);
 ```
 
-`onData` is a required callback of `void Function(dynamic data)?`. `data` is whatever is passed into the `broadcast`.
+`onData` is a required callback of `FutureOr<void> Function(dynamic data, void Function([dynamic input]) respond)?`. `data` is whatever is passed into the `broadcast`.
 
-`onError` is an optional named callback of `void Function(Object error)?`. `error` is the passed error or exception, but it can be any `Object?` if the override method is used in the `broadcast`.
+`onError` is an optional named callback of `FutureOr<void> Function(Object error, void Function([dynamic input]) respond)?`. `error` is the passed error or exception, but it can be any `Object?` if the override method is used in the `broadcast`.
 
-`onDone` is an optional named callback of `void Function()`. This is called when the key is marked as done.
+`onDone` is an optional named callback of `FutureOr<void> Function()`. This is called when the key is marked as done. **This is not called when the listener alone is disposed.
 
-`onStreamError` is an optional named callback that is called when the `StreamSubscription` errors. This is different from `onError`. The default of this is ignore.
+`onStreamError` is an optional named callback of type `FutureOr<void> Function(Object error)?` that is called when the `StreamSubscription` errors. This is different from `onError`. The default of this is ignore.
 
 The `T` is only used as a runtime check. If the received data is not of type `T`, `onData` is still called, but its data will be null.
 
@@ -97,10 +97,8 @@ Syntax:
 QuickListener().done();
 ```
 
-This broadcasts the `done` event, which removes the key(s) and disposes of the listeners, after triggering their `onDone`s. You can call `QuickListener().done()` instead, which is just a shortcut to broadcasting the `done` event.
+This broadcasts the `done` event, which removes the key(s) and disposes of the listeners, after triggering their `onDone`s. With this, all listeners with the key sent is closed, and the key is removed from the active keys list. It does take some time to close all listeners, due to the nature of broadcasting. However, you can await this if needed.
 
-All listeners with the key sent is closed, and the key is removed from the active keys list.
+**Warning**: Using this on a null key cancels all active keys.
 
-It does take some time to close all listeners, due to the nature of broadcasting. However, you can await this if needed.
-
-**Warning**: Using these on a null key cancels all active keys.
+You can also dispose a single listener by using `QuickListener.dispose`. This just removes all listeners of that *instance*, not key.

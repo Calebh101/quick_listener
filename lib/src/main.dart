@@ -330,6 +330,11 @@ class QuickListener {
       _keys.clear();
     }
 
+    await dispose();
+  }
+
+  /// This removes all listeners on this **instance**. This is different from [done] in that it only disposes subscriptions of this listener, but [done] repeats this for *every* listener *and* removes the key(s) specified.
+  Future<void> dispose() async {
     if (_subscriptions.isNotEmpty) await Future.wait(_subscriptions.map((x) => x.cancel()));
     _subscriptions.clear();
   }

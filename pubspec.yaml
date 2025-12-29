@@ -1,6 +1,6 @@
 name: quick_listener
 description: A Dart package to make setting up streams and stream subscriptions a lot simpler.
-version: 0.0.1
+version: 0.0.2
 repository: https://github.com/Calebh101/quick_listener
 
 environment:
