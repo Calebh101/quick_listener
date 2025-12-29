@@ -3,8 +3,9 @@ library;
 
 import 'dart:async';
 
-List<String> _keys = [];
-bool _debugMode = false;
+List<String> _keys = []; // Active keys
+bool _debugMode = false; // Debug mode
+final Map<int, BroadcastBarrier> _broadcastBarriers = {}; // Broadcast barriers active
 
 int _nodeIdCounter = 0;
 int _nextNodeId() => ++_nodeIdCounter;
@@ -12,24 +13,8 @@ int _nextNodeId() => ++_nodeIdCounter;
 int _broadcastIdCounter = 0;
 int _nextBroadcastId() => ++_broadcastIdCounter;
 
-final Map<int, BroadcastBarrier> _broadcastBarriers = {};
-final Map<int, int> _listenerCounts = {};
-
-StreamController<QuickListenerEvent> _controller = StreamController.broadcast();
-StreamController<QuickListenerResponse> _responseController =
-    StreamController.broadcast();
-
-class BroadcastBarrier {
-  int remaining;
-  final Completer<void> completer = Completer<void>();
-
-  BroadcastBarrier(this.remaining);
-
-  void signal() {
-    remaining--;
-    if (remaining <= 0 && !completer.isCompleted) completer.complete();
-  }
-}
+StreamController<QuickListenerEvent> _controller = StreamController.broadcast(); // Main stream
+StreamController<QuickListenerResponse> _responseController = StreamController.broadcast(); // A stream that only controls responses
 
 /// Get all keys currently active.
 ///
@@ -54,6 +39,50 @@ bool _isError(Object? object) {
   return object is Error || object is Exception;
 }
 
+/// A class to handle broadcasts and completions.
+class BroadcastBarrier {
+  /// The amount of listeners that still need to respond.
+  int remaining;
+
+  /// If the broadcast has been sent to listeners.
+  bool broadcastFinished = false;
+
+  /// This is completed when there are 0 listeners remaining.
+  final Completer<void> completer = Completer<void>();
+
+  /// A class to handle broadcasts and completions.
+  BroadcastBarrier() : remaining = 0;
+
+  /// This is called when a listener has received the broadcast.
+  void received(int id) {
+    remaining++;
+  }
+
+  /// This is called when a listener has finished the broadcast.
+  void signal(int id) {
+    remaining--;
+    _tryComplete();
+  }
+
+  /// This is called by the broadcasting node to tell the barrier that the broadcast has been sent.
+  void finishBroadcast() {
+    broadcastFinished = true;
+    _tryComplete();
+  }
+
+  // Complete if the required conditions are met.
+  void _tryComplete() {
+    if (broadcastFinished && remaining == 0 && !completer.isCompleted) {
+      completer.complete();
+    }
+  }
+
+  @override
+  String toString() {
+    return "BroadcastBarrier(remaining: $remaining, completed: ${completer.isCompleted})";
+  }
+}
+
 /// A specifier for the type of [QuickListenerEvent].
 enum QuickListenerEventType {
   /// Normal event.
@@ -66,40 +95,18 @@ enum QuickListenerEventType {
   done,
 }
 
-/// Called when a developer inputs an improper input for QuickListener's key/list of keys.
-class QuickListenerTypeError extends TypeError {
-  /// The type(s) expected.
-  List<String>? expected;
-
-  /// The type received.
-  Type got;
-
-  /// Called when a developer inputs an improper input for QuickListener's key/list of keys.
-  QuickListenerTypeError({this.expected, required this.got});
-
-  /// A string representation of this error.
-  ///
-  /// Shows the expected type(s), the received type, and a message to go along with it.
-  @override
-  String toString() {
-    expected ??= ["null", "String", "List<String>"];
-    return "QuickListenerTypeError: QuickListener input must be 1 of ${expected!.length} types: ${expected!.join(", ")}.\nExpected: ${expected!.join(" | ")}\nGot: $got";
-  }
-}
-
 /// Define a [QuickListener] to either listen, broadcast, or close a key's stream.
 ///
 /// [QuickListener]'s don't contain stream controllers. If you call [QuickListener.done], it'll close all listeners of that key, no matter what object it's using.
 ///
 /// The only held state is the stream subscription created when [listen] is called, but this is disposed of cleanly when [done] is called on the key.
 class QuickListener {
-  /// The list that contains the keys for the object.
+  /// The key associated with this [QuickListener].
   ///
-  /// This is null if the input is null.
-  ///
-  /// If the input is just one string, then this is set to an array with only that one string.
-  List<String>? keys;
+  /// If this is null, it's associated with *all* keys.
+  final String? key;
 
+  /// The ID of this listener.
   final int id;
 
   // This is added to for each [listen] that's called.
@@ -110,63 +117,20 @@ class QuickListener {
   /// [QuickListener]'s don't contain stream controllers. If you call [QuickListener.done], it'll close all listeners of that key, no matter what object it's using.
   ///
   /// The only held state is the stream subscription created when [listen] is called, but this is disposed of cleanly when [done] is called on the key.
-  QuickListener([Object? key]) : id = _nextNodeId() {
-    if (key == null) {
-      keys = null;
-    } else if (key is List) {
-      if (key is List<String>) {
-        keys = key;
-      } else {
-        throw QuickListenerTypeError(
-          got: key.runtimeType,
-          expected: ["List<String>"],
-        );
-      }
-    } else if (key is String) {
-      keys = [key];
-    } else {
-      throw QuickListenerTypeError(got: key.runtimeType);
-    }
-
+  QuickListener([this.key]) : id = _nextNodeId() {
     _initialize();
-  }
-
-  /// Copy of [QuickListener.new], but more type-safe.
-  /// This one is specifically for all keys to be enabled.
-  factory QuickListener.all() {
-    return QuickListener();
-  }
-
-  /// Copy of [QuickListener.new], but more type-safe.
-  /// This one is specifically for [key] as a [String].
-  factory QuickListener.single(String key) {
-    return QuickListener(key);
-  }
-
-  /// Copy of [QuickListener.new], but more type-safe.
-  /// This one is specifically for [key] as a `List<String`.
-  factory QuickListener.multiple(List<String> key) {
-    return QuickListener(key);
   }
 
   @override
   String toString() {
-    return "QuickListener(keys: $keys)";
+    return "QuickListener(key: $key)";
   }
 
   // This function isn't called directly; it's used to generate a function for the user to call to send a response.
-  void Function([dynamic input]) _respond(bool error) {
+  void Function([dynamic input]) _respond(bool error, int bid) {
     return ([dynamic input]) {
-      _responseController.add(QuickListenerResponse(keys, input, error));
+      _responseController.add(QuickListenerResponse(key, input, error));
     };
-  }
-
-  void _addListener([bool remove = false]) {
-    _listenerCounts.update(
-      id,
-      (value) => value <= 0 && remove ? 0 : (value + (remove ? -1 : 1)),
-      ifAbsent: () => remove ? 0 : 1,
-    );
   }
 
   /// Start listening to the keys specified.
@@ -175,59 +139,40 @@ class QuickListener {
   ///
   /// When data is received, it is only passed into [onData] if it is an instance of [T].
   QuickListener listen<T>(
-    FutureOr<void> Function(T? data, void Function([dynamic input]) respond)?
-    onData, {
-    FutureOr<void> Function(
-      Object error,
-      void Function([dynamic input]) respond,
-    )?
-    onError,
+    FutureOr<void> Function(T? data, void Function([dynamic input]) respond)? onData, {
+    FutureOr<void> Function(Object error, void Function([dynamic input]) respond)? onError,
     FutureOr<void> Function(Object error)? onStreamError,
+    FutureOr<void> Function()? onDone,
   }) {
-    _addListener();
-    _debug("Found ${_listenerCounts[id]} listeners for ID $id");
-
     _subscriptions.add(
       _controller.stream.listen(
         (QuickListenerEvent input) async {
+          _broadcastBarriers[input.id]?.received(id);
           QuickListenerEventType event = input.type;
 
-          if (input.keys != null &&
-              keys != null &&
-              !input.keys!.any((element) => keys!.contains(element))) {
+          if (key != null && input.key != null && key != input.key) {
             return;
           }
 
           try {
             if (event == QuickListenerEventType.error && input.error != null) {
-              await onError?.call(input.error!, _respond(true));
-              return;
+              await onError?.call(input.error!, _respond(true, input.id));
+            } else if (event == QuickListenerEventType.done) {
+              await onDone?.call();
+              await _done();
+            } else {
+              await onData?.call(
+                input.data is T ? input.data : null,
+                _respond(false, input.id),
+              );
             }
-
-            if (event == QuickListenerEventType.done) {
-              if (input.keys != null) {
-                for (var x in input.keys!) {
-                  keys?.remove(x);
-                }
-              } else {
-                keys?.clear();
-              }
-
-              if (keys != null && keys!.isEmpty) {
-                await done();
-              }
-            }
-
-            await onData?.call(
-              input.data is T ? input.data : null,
-              _respond(false),
-            );
           } finally {
-            _broadcastBarriers[input.id]?.signal();
+            final barrier = _broadcastBarriers[input.id];
+            barrier?.signal(id);
           }
         },
         cancelOnError: false,
-        onError: onStreamError ?? (e) {},
+        onError: onStreamError ?? (_) {},
       ),
     );
 
@@ -239,17 +184,18 @@ class QuickListener {
   /// [input] is sent as an error (thus triggering a listener's [StreamSubscription.onError]) when [input] can be classified as an [Error] or [Exception]. To manually override this, you can input a [QuickListenerData] object instead.
   Future<QuickListener> broadcastAndWait([dynamic input]) async {
     final bid = _nextBroadcastId();
-    final count = _listenerCounts[bid] ?? 0;
-    final barrier = BroadcastBarrier(count);
+    final barrier = BroadcastBarrier();
 
     _broadcastBarriers[bid] = barrier;
     _broadcast(bid, input);
-    _debug("Broadcasting broadcast $bid from node $id");
+    _debug("Broadcasting broadcast $bid from node $key");
+    barrier.finishBroadcast();
 
     await barrier.completer.future.whenComplete(() {
       _broadcastBarriers.remove(bid);
     });
 
+    _debug("After broadcast, barrier: $barrier");
     return this;
   }
 
@@ -278,14 +224,15 @@ class QuickListener {
     try {
       if (input._error == true) throw Exception();
       _controller.sink.add(
-        input._done == true
-            ? QuickListenerEvent.done(keys: keys, id: id)
-            : QuickListenerEvent(
-                data: input.data,
-                error: null,
-                keys: keys,
-                id: id,
-              ),
+        input._done == true ? QuickListenerEvent.done(
+              key: key,
+              id: id,
+        ) : QuickListenerEvent(
+          data: input.data,
+          error: null,
+          key: key,
+          id: id,
+        ),
       );
     } catch (e) {
       Object error = e;
@@ -297,7 +244,7 @@ class QuickListener {
             data: null,
             error: error,
             type: QuickListenerEventType.error,
-            keys: keys,
+            key: key,
             id: id,
           ),
         );
@@ -326,9 +273,7 @@ class QuickListener {
   /// Timeouts are uncaught.
   Future<QuickListenerEvent> waitForNewData({Duration? timeout}) async {
     final stream = _getStream([QuickListenerEventType.data]);
-    final result = timeout == null
-        ? await stream.first
-        : await stream.first.timeout(timeout);
+    final result = timeout == null ? await stream.first : await stream.first.timeout(timeout);
     return result;
   }
 
@@ -342,9 +287,7 @@ class QuickListener {
     List<QuickListenerEventType> events = QuickListenerEventType.values,
   }) async {
     final stream = _getStream(events);
-    final result = timeout == null
-        ? await stream.first
-        : await stream.first.timeout(timeout);
+    final result = timeout == null ? await stream.first : await stream.first.timeout(timeout);
     return result;
   }
 
@@ -358,11 +301,11 @@ class QuickListener {
     late StreamSubscription subscription;
 
     subscription = _responseController.stream.listen((response) {
-      final values = response.keys;
-      final set = keys?.toSet();
+      final value = response.key;
+      final target = key;
 
-      if (values == null || set == null || values.any(set.contains)) {
-        completer.complete(response);
+      if (value == null || target == null || value == target) {
+        if (!completer.isCompleted) completer.complete(response);
         subscription.cancel();
       }
     });
@@ -379,31 +322,28 @@ class QuickListener {
     return completer.future;
   }
 
-  /// Closes down the key by removing it and its state, and disposing of all the listeners. It can be re-added later.
-  ///
-  /// [referencedFromStream] is for internal use only.
-  Future<void> done([bool referencedFromStream = false]) async {
-    for (String key in keys ?? []) {
+  // Dispose of all subscriptions and keys.
+  Future<void> _done() async {
+    if (key != null) {
       _keys.remove(key);
+    } else if (_keys.isNotEmpty) {
+      _keys.clear();
     }
 
-    if (_subscriptions.isNotEmpty)
-      await Future.wait(_subscriptions.map((x) => x.cancel()));
+    if (_subscriptions.isNotEmpty) await Future.wait(_subscriptions.map((x) => x.cancel()));
     _subscriptions.clear();
-    _addListener(true);
-    _debug("Found ${_listenerCounts[id]} listeners for ID $id");
+  }
 
-    if (!referencedFromStream) {
-      await broadcastAndWait(QuickListenerData.done());
-    }
+  /// Closes down the key by removing it and its state, and disposing of all the listeners. It can be re-added later.
+  Future<void> done() async {
+    await broadcastAndWait(QuickListenerData.done());
+    await _done();
   }
 
   // Make sure each key's state exists in [_keys].
   void _initialize() {
-    for (String key in (keys ?? [])) {
-      if (!_keys.contains(key)) {
-        _keys.add(key);
-      }
+    if (key != null && !_keys.contains(key)) {
+      _keys.add(key!);
     }
   }
 }
@@ -420,7 +360,7 @@ class QuickListenerEvent {
   final Object? error;
 
   /// The key(s) affected. Null if all.
-  final List? keys;
+  final String? key;
 
   /// ID of the broadcasting node.
   final int id;
@@ -437,19 +377,16 @@ class QuickListenerEvent {
     QuickListenerEventType? event,
     required this.data,
     required this.error,
-    required this.keys,
+    required this.key,
     required this.id,
   });
 
   /// Simply sets [type] to [QuickListenerEventType.done].
-  QuickListenerEvent.done({required this.keys, required this.id})
-    : type = QuickListenerEventType.done,
-      data = null,
-      error = null;
+  QuickListenerEvent.done({required this.key, required this.id}) : type = QuickListenerEventType.done, data = null, error = null;
 
   @override
   String toString() {
-    return "QuickListenerEvent(keys: $keys, type: $type, data: $data)";
+    return "QuickListenerEvent(key: $key, type: $type, data: $data)";
   }
 }
 
@@ -459,11 +396,14 @@ class QuickListenerData {
   /// The included data in the base [QuickListenerData].
   final dynamic data;
 
-  /// The included error when an error is used.
+  /// The included error when an error is signaled.
   final Object? error;
 
-  final bool _error; // True if an error is used.
-  final bool _done; // True if the done signal is used.
+  // True if an error is signaled.
+  final bool _error;
+
+  // True if the done signal is signaled.
+  final bool _done;
 
   /// This is used for an easy way of transmitting data, errors, or "done" signals.
   /// You can input this into [QuickListener.broadcast] to override the default method, which is using any [Error] or [Exception] as an error.
@@ -482,11 +422,7 @@ class QuickListenerData {
   /// You can input this into [QuickListener.broadcast] to override the default method, which is using any [Error] or [Exception] as an error.
   ///
   /// This sends a done signal instead of a regular data event.
-  QuickListenerData.done()
-    : data = null,
-      error = null,
-      _error = false,
-      _done = true;
+  QuickListenerData.done() : data = null, error = null, _error = false, _done = true;
 
   @override
   String toString() {
@@ -498,14 +434,19 @@ class QuickListenerData {
 ///
 /// This can optionally contain data.
 class QuickListenerResponse {
-  final List<String>? keys;
+  /// The key associated with this response.
+  final String? key;
+
+  /// The optional data/error associated with this response.
   final dynamic input;
+
+  /// Whether [input] should be treated as an error or not.
   final bool error;
 
   /// A response for a data event or error event from any listeners.
   ///
   /// This can optionally contain data.
-  const QuickListenerResponse(this.keys, this.input, this.error);
+  const QuickListenerResponse(this.key, this.input, this.error);
 
   @override
   String toString() {

@@ -1,9 +1,13 @@
 import 'package:quick_listener/quick_listener.dart';
 
 void main(List<String> arguments) async {
-  if (arguments.contains("--debug")) enableQuickListenerDebugMode();
-  print("Broadcasting to keys without listeners");
-  QuickListener(["key1", "key2"]).broadcast(QuickListenerData("Hello, world!"));
+  if (arguments.contains("--debug"))enableQuickListenerDebugMode();
+  print("Disposing an unused key");
+  await QuickListener("key0").done();
+  print("All keys: ${getAllQuickListenerKeys()}");
+
+  print("Broadcasting to key1 without a listener");
+  QuickListener("key1").broadcast(QuickListenerData("Hello, world!"));
   await countdown();
 
   print("Listening to key1 (onData and onError)");
@@ -14,6 +18,9 @@ void main(List<String> arguments) async {
     },
     onError: (error, respond) {
       print("key1 error: $error");
+    },
+    onDone: () {
+      print("key1 done");
     },
   );
 
@@ -36,23 +43,21 @@ void main(List<String> arguments) async {
   if (!arguments.contains("--no-repeated-broadcast-test")) {
     await countdown();
     print("Broadcasting to both key1 and key2");
-    QuickListener(["key1", "key2"]).broadcast(QuickListenerData("Hello, world!"));
+    QuickListener("key1").broadcast(QuickListenerData("Hello, world!"));
+    QuickListener("key2").broadcast(QuickListenerData("Hello, world! 2"));
 
     await countdown();
     print("Broadcasting to key2");
-    QuickListener("key2").broadcast("Hello, world! 2");
+    QuickListener("key2").broadcast("Hello, world! 2.2");
 
     await countdown();
-    QuickListener("key1").broadcast("Hello, world! 1");
+    QuickListener("key1").broadcast("Hello, world! 1.2");
 
     await countdown();
-    QuickListener(["key3"]).broadcast("Hello, world! 3");
+    QuickListener("key3").broadcast("Hello, world! 3");
 
     await countdown();
-    QuickListener(["key3"]).broadcast(3);
-
-    await countdown();
-    QuickListener(["key1"]).broadcast(Error());
+    QuickListener("key3").broadcast(3);
 
     await countdown();
     QuickListener("key3").done();
@@ -67,33 +72,35 @@ void main(List<String> arguments) async {
     respond();
   });
 
-  await countdown();
-  print("Broadcasting to key4 and waiting for response");
-  await QuickListener("key4").broadcast().waitForResponse();
-  print("Received response from key4");
+  if (!arguments.contains("--no-repeated-async-test")) {
+    await countdown();
+    print("Broadcasting to key4 and waiting for response");
+    await QuickListener("key4").broadcast().waitForResponse();
+    print("Received response from key4");
 
-  await countdown(2);
-  print("All keys: ${getAllQuickListenerKeys()}");
-  print("Disposing key2");
-  await QuickListener("key2").done();
-  print("All keys: ${getAllQuickListenerKeys()}");
+    await countdown(2);
+    print("All keys: ${getAllQuickListenerKeys()}");
+    print("Disposing key2");
+    await QuickListener("key2").done();
+    print("All keys: ${getAllQuickListenerKeys()}");
 
-  (() async {
-    print("Broadcasting on key5 in 3 seconds...");
-    await countdown(3);
-    QuickListener("key5").broadcast();
-    await countdown(3);
-    QuickListener("key5").broadcast();
-    QuickListener("key5").broadcast(Error());
-  })();
+    (() async {
+      print("Broadcasting on key5 in 3 seconds...");
+      await countdown(3);
+      QuickListener("key5").broadcast();
+      await countdown(3);
+      QuickListener("key5").broadcast();
+      QuickListener("key5").broadcast(Error());
+    })();
 
-  print("Waiting for key5 to get new data...");
-  final data = await QuickListener("key5").waitForNewData();
-  print("Received data from key5: $data");
+    print("Waiting for key5 to get new data...");
+    final data = await QuickListener("key5").waitForNewData();
+    print("Received data from key5: $data");
 
-  print("Waiting for key5 to get a new event...");
-  final event = await QuickListener("key5").waitForNewEvent();
-  print("Received event from key5: $event");
+    print("Waiting for key5 to get a new event...");
+    final event = await QuickListener("key5").waitForNewEvent();
+    print("Received event from key5: $event");
+  }
 
   print("All keys: ${getAllQuickListenerKeys()}");
   print("Disposing all keys...");
